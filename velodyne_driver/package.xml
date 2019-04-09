@@ -1,12 +1,13 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>velodyne_driver</name>
-  <version>1.5.2</version>
+  <version>1.5.3</version>
   <description>
     ROS device driver for Velodyne 3D LIDARs.
   </description>
   <maintainer email="jwhitley@autonomoustuff.com">Josh Whitley</maintainer>
   <maintainer email="brice.rebsamen@gmail.com">Brice Rebsamen</maintainer>
+  <maintainer email="alexander@g.sp.m.is.nagoya-u.ac.jp">Alexander Carballo</maintainer>
   <author>Jack O'Quin</author>
   <author>Patrick Beeson</author>
   <author>Michael Quinlan</author>

@@ -1,11 +1,12 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>velodyne_pointcloud</name>
-  <version>1.5.2</version>
+  <version>1.5.3</version>
   <description>
     Point cloud conversions for Velodyne 3D LIDARs.
   </description>
   <maintainer email="jwhitley@autonomoustuff.com">Josh Whitley</maintainer>
+  <maintainer email="alexander@g.sp.m.is.nagoya-u.ac.jp">Alexander Carballo</maintainer>
   <author>Jack O'Quin</author>
   <author>Piyush Khandelwal</author>
   <author>Jesse Vera</author>
