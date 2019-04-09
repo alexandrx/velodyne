@@ -1,6 +1,7 @@
 /*
  *  Copyright (C) 2007 Austin Robot Technology, Patrick Beeson
  *  Copyright (C) 2009, 2010, 2012 Austin Robot Technology, Jack O'Quin
+ *  Copyright (C) 2017, Velodyne LiDAR INC., Algorithms and Signal Processing Group
  *
  *  License: Modified BSD Software License Agreement
  *
@@ -21,6 +22,7 @@
  *
  *  @author Patrick Beeson
  *  @author Jack O'Quin
+ *  @author Velodyne LiDAR, Algorithms and Signal Processing Group
  *
  *  HDL-64E S2 calibration support provided by Nick Hillier
  */
@@ -117,6 +119,11 @@ inline float SQR(float val) { return val*val; }
       cos_rot_table_[rot_index] = cosf(rotation);
       sin_rot_table_[rot_index] = sinf(rotation);
     }
+
+    for (uint8_t i = 0; i < 16; i++) {
+      vls_128_laser_azimuth_cache[i] = (VLS128_CHANNEL_TDURATION / VLS128_SEQ_TDURATION) * (i + i / 8);
+    }
+
    return 0;
   }
 
@@ -148,6 +155,11 @@ inline float SQR(float val) { return val*val; }
 	  cos_rot_table_[rot_index] = cosf(rotation);
 	  sin_rot_table_[rot_index] = sinf(rotation);
       }
+
+      for (uint8_t i = 0; i < 16; i++) {
+        vls_128_laser_azimuth_cache[i] = (VLS128_CHANNEL_TDURATION / VLS128_SEQ_TDURATION) * (i + i / 8);
+      }
+
       return 0;
   }
 
