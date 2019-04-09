@@ -38,6 +38,9 @@
 #include <string>
 #include <cmath>
 
+#include <time.h>
+#include <stdio.h>
+#include <math.h>
 #include <ros/ros.h>
 #include <tf/transform_listener.h>
 #include <velodyne_msgs/VelodyneScan.h>
@@ -46,6 +49,178 @@
 
 namespace velodyne_driver
 {
+  static double prev_frac_packet = 0;
+  inline   std::string toBinary(int n)
+  {
+        std::string r;
+        while(n!=0) {r=(n%2==0 ?"0":"1")+r; n/=2;}
+        while (r.length() != 8){
+          r = '0' + r;
+        }
+        return r;
+  }
+
+  inline   double convertBinaryToDecimal(std::string binaryString)
+  {
+      double value = 0;
+      int indexCounter = 0;
+      for(int i=binaryString.length()-1;i>=0;i--){
+
+          if(binaryString[i]=='1'){
+              value += pow(2, indexCounter);
+          }
+          indexCounter++;
+      }
+      return value;
+  }
+
+  inline   double computeTimeStamp(velodyne_msgs::VelodyneScanPtr scan, int index){
+
+      std::string digit4 = toBinary(scan->packets[index].data[1203]);
+      std::string digit3 = toBinary(scan->packets[index].data[1202]);
+      std::string digit2 = toBinary(scan->packets[index].data[1201]);
+      std::string digit1 = toBinary(scan->packets[index].data[1200]);
+      std::string digit = digit4 + digit3 + digit2 + digit1; // string concatenation
+      double value = convertBinaryToDecimal(digit);
+      // compute the seconds from the beginning of that hour to when the data being captured
+      double time_stamp = (double)value / 1000000;
+      return time_stamp;
+  }
+
+/** Utility function for Velodyne Driver
+ *  gets the number of laser beams fired concurrently 
+ *  for different sensor models 
+*/
+
+inline int get_concurrent_beams(uint8_t sensor_model)
+{
+/*
+Strongest 0x37 (55)   HDL-32E 0x21 (33)
+Last Return 0x38 (56) VLP-16 0x22 (34)
+Dual Return 0x39 (57) Puck LITE 0x22 (34)
+         -- --        Puck Hi-Res 0x24 (36)
+         -- --        VLP-32C 0x28 (40)
+         -- --        Velarray 0x31 (49)
+         -- --        VLS-128 0xA1 (161)
+*/
+
+  switch(sensor_model)
+  {
+    case 33:
+        return(2); // hdl32e
+    case 34:
+        return(1); // vlp16 puck lite
+    case 36:
+        return(1); // puck hires  (same as vlp16 ?? need to check)
+    case 40:
+        return(2); // vlp32c
+    case 49:
+        return(2); // velarray
+    case 161:
+        return(8); // vls128
+    case 99:
+        return(8); // vls128
+    default:
+        ROS_WARN_STREAM("[Velodyne Ros driver]Default assumption of device id .. Defaulting to HDL64E with 2 simultaneous firings");
+        return(2); // hdl-64e
+
+  }
+}
+
+/** Utility function for Velodyne Driver
+ *  gets the number of packet multiplier for dual return mode vs 
+ *  single return mode 
+*/
+
+inline int get_rmode_multiplier(uint8_t sensor_model, uint8_t packet_rmode)
+{
+ /*
+    HDL64E 2
+    VLP32C 2
+    HDL32E 2
+    VLS128 3
+    VLSP16 2
+*/
+  if(packet_rmode  == 57)
+  {
+    switch(sensor_model)
+    {
+      case 33:
+          return(2); // hdl32e
+      case 34:
+          return(2); // vlp16 puck lite
+      case 36:
+          return(2); // puck hires 
+      case 40:
+          return(2); // vlp32c
+      case 49:
+          return(2); // velarray
+      case 161:
+          return(3); // vls128
+      case 99:
+          return(3); // vls128
+      default:
+          ROS_WARN_STREAM("[Velodyne Ros driver]Default assumption of device id .. Defaulting to HDL64E with 2x number of packekts for Dual return");
+          return(2); // hdl-64e
+    }
+   }
+   else
+   {
+     return(1);
+   }
+}
+
+/** Utility function for the Velodyne driver 
+ *
+ *  provides a estimated value for number of packets in 
+ *  1 full scan at current operating rpm estimate of the sensor 
+ *  This value is used by the poll() routine to assemble 1 scan from 
+ *  required number of packets 
+ *  @returns number of packets in full scan 
+ */
+
+inline int get_auto_npackets(uint8_t sensor_model, uint8_t packet_rmode, double auto_rpm, double firing_cycle, int active_slots) 
+{
+  double rps = auto_rpm / 60.0; 
+  double time_for_360_degree_scan = 1.0/rps;
+  double total_number_of_firing_cycles_per_full_scan = time_for_360_degree_scan / firing_cycle;
+  double total_number_of_firings_per_full_scan =  total_number_of_firing_cycles_per_full_scan 
+                                                * get_concurrent_beams(sensor_model); 
+  double total_number_of_points_captured_for_single_return = active_slots * total_number_of_firings_per_full_scan;
+  double total_number_of_packets_per_full_scan = total_number_of_points_captured_for_single_return / 384;
+  double total_number_of_packets_per_second = total_number_of_packets_per_full_scan / time_for_360_degree_scan;
+  double auto_npackets = get_rmode_multiplier(sensor_model,packet_rmode) * floor((total_number_of_packets_per_full_scan+prev_frac_packet));
+  prev_frac_packet = get_rmode_multiplier(sensor_model,packet_rmode) * (total_number_of_packets_per_full_scan + prev_frac_packet) - auto_npackets ;
+  return(auto_npackets);
+}
+
+/** Utility function for the Velodyne driver 
+ *
+ *  provides a estimated value for number of packets in 
+ *  1 second at current operating rpm estimate of the sensor 
+ *  This value is used by the pcap reader (InputPCAP class ) 
+ *  to pace the speed of packet reading.
+ *  @returns number of packets per second 
+ */
+
+inline double get_auto_packetrate(uint8_t sensor_model, uint8_t packet_rmode, double auto_rpm, double firing_cycle, int active_slots) 
+{
+  double rps = auto_rpm / 60.0; 
+  double time_for_360_degree_scan = 1.0/rps;
+  double total_number_of_firing_cycles_per_full_scan = time_for_360_degree_scan / firing_cycle;
+  double total_number_of_firings_per_full_scan =  total_number_of_firing_cycles_per_full_scan 
+                                                * get_concurrent_beams(sensor_model); 
+  double total_number_of_points_captured_for_single_return = active_slots * total_number_of_firings_per_full_scan;
+  double total_number_of_packets_per_full_scan = total_number_of_points_captured_for_single_return / 384;
+  double total_number_of_packets_per_second = total_number_of_packets_per_full_scan / time_for_360_degree_scan;
+  return((get_rmode_multiplier(sensor_model,packet_rmode)*total_number_of_packets_per_second));
+}
+/** Constructor for the Velodyne driver 
+ *
+ *  provides a binding to ROS node for processing and 
+ *  configuration 
+ *  @returns handle to driver object
+ */
 
 VelodyneDriver::VelodyneDriver(ros::NodeHandle node,
                                ros::NodeHandle private_nh)
@@ -60,16 +235,22 @@ VelodyneDriver::VelodyneDriver(ros::NodeHandle node,
   private_nh.param("model", config_.model, std::string("64E"));
   double packet_rate;                   // packet frequency (Hz)
   std::string model_full_name;
-  if ((config_.model == "64E_S2") || 
+  if ((config_.model == "64E_S2") ||
       (config_.model == "64E_S2.1"))    // generates 1333312 points per second
     {                                   // 1 packet holds 384 points
       packet_rate = 3472.17;            // 1333312 / 384
       model_full_name = std::string("HDL-") + config_.model;
+      slot_time = 1.2e-6; // basic slot time
+      num_slots = 116;                     // number of active + maintenence slots
+      active_slots = 32;                  // number of active slots
     }
   else if (config_.model == "64E")
     {
       packet_rate = 2600.0;
       model_full_name = std::string("HDL-") + config_.model;
+      slot_time = 1.2e-6; // basic slot time
+      num_slots = 116;                     // number of slots
+      active_slots = 32;                  // number of active slots
     }
   else if (config_.model == "64E_S3") // generates 2222220 points per second (half for strongest and half for lastest)
     {                                 // 1 packet holds 384 points
@@ -80,11 +261,17 @@ VelodyneDriver::VelodyneDriver(ros::NodeHandle node,
     {
       packet_rate = 1808.0;
       model_full_name = std::string("HDL-") + config_.model;
+      slot_time = 1.152e-6; // basic slot time
+      num_slots = 40;                     // number of slots
+      active_slots = 32;                  // number of active slots
     }
     else if (config_.model == "32C")
     {
       packet_rate = 1507.0;
       model_full_name = std::string("VLP-") + config_.model;
+      slot_time = 2.304e-6; // basic slot time
+      num_slots = 24;                     // number of slots
+      active_slots = 16;                  // number of active slots
     }
   else if (config_.model == "VLP16")
     {
@@ -226,18 +413,18 @@ bool VelodyneDriver::poll(void)
   // Since the velodyne delivers data at a very high rate, keep
   // reading and publishing scans as fast as possible.
     scan->packets.resize(config_.npackets);
-    for (int i = 0; i < config_.npackets; ++i)
-    {
+  for (int i = 0; i < config_.npackets; ++i)
+  {
       while (true)
-        {
+      {
           // keep reading until full packet received
           int rc = input_->getPacket(&scan->packets[i], config_.time_offset);
           if (rc == 0) break;       // got a full packet?
           if (rc < 0) return false; // end of file reached?
-        }
-    }
+      }
+      }
   }
-
+  
   // publish message using time of last packet read
   ROS_DEBUG("Publishing a full Velodyne scan.");
   scan->header.stamp = scan->packets.back().stamp;
@@ -248,7 +435,7 @@ bool VelodyneDriver::poll(void)
   // its status
   diag_topic_->tick(scan->header.stamp);
   diagnostics_.update();
-
+         
   return true;
 }
 
